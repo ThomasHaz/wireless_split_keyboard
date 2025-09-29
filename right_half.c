@@ -24,10 +24,6 @@ const uint col_pins[COLS] = {7, 8, 9, 10, 11, 12, 13};
 static bool key_state[ROWS][COLS] = {0};
 static uint32_t last_change_time[ROWS][COLS] = {0};
 
-// UART Service UUID (custom)
-static const char* UART_SERVICE_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E";
-static const char* UART_TX_UUID = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E";
-
 static uint16_t uart_tx_handle = 0;
 static hci_con_handle_t connection_handle = HCI_CON_HANDLE_INVALID;
 static bool connected = false;
@@ -171,7 +167,7 @@ int main() {
     gap_set_bondable_mode(1);
     
     // Register packet handler
-    hci_event_callback_registration_t hci_event_callback_registration;
+    btstack_packet_callback_registration_t hci_event_callback_registration;
     hci_event_callback_registration.callback = &packet_handler;
     hci_add_event_handler(&hci_event_callback_registration);
     

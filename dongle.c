@@ -8,9 +8,24 @@
 #include <string.h>
 #include "pico/stdlib.h"
 #include "pico/cyw43_arch.h"
-#include "btstack.h"
-#include "tusb.h"
 #include "hardware/gpio.h"
+
+// Include TinyUSB first to avoid conflicts
+#include "tusb.h"
+
+// Prevent BTstack from redefining HID types
+#define __HID_H
+
+// Then include BTstack headers
+#include "btstack_run_loop.h"
+#include "hci.h"
+#include "hci_cmd.h"
+#include "btstack_event.h"
+#include "gap.h"
+#include "l2cap.h"
+#include "ble/sm.h"
+#include "ble/att_server.h"
+#include "ble/gatt_client.h"
 
 // Key event structure (must match keyboard halves)
 typedef struct {
@@ -445,20 +460,13 @@ static hci_con_handle_t right_handle = HCI_CON_HANDLE_INVALID;
 
 static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size) {
     UNUSED(channel);
+    UNUSED(size);
     
     if (packet_type != HCI_EVENT_PACKET) return;
     
-    switch (hci_event_packet_get_type(packet)) {
-        case GATT_EVENT_NOTIFICATION: {
-            key_event_t event;
-            uint16_t value_length = gatt_event_notification_get_value_length(packet);
-            if (value_length == sizeof(key_event_t)) {
-                memcpy(&event, gatt_event_notification_get_value(packet), sizeof(event));
-                process_key_event(&event);
-            }
-            break;
-        }
-        
+    uint8_t event_type = hci_event_packet_get_type(packet);
+    
+    switch (event_type) {
         case HCI_EVENT_DISCONNECTION_COMPLETE: {
             hci_con_handle_t handle = hci_event_disconnection_complete_get_connection_handle(packet);
             if (handle == left_handle) {
@@ -467,6 +475,16 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
             } else if (handle == right_handle) {
                 right_handle = HCI_CON_HANDLE_INVALID;
                 printf("Right half disconnected\n");
+            }
+            break;
+        }
+        
+        case GATT_EVENT_NOTIFICATION: {
+            key_event_t event;
+            uint16_t value_length = gatt_event_notification_get_value_length(packet);
+            if (value_length == sizeof(key_event_t)) {
+                memcpy(&event, gatt_event_notification_get_value(packet), sizeof(event));
+                process_key_event(&event);
             }
             break;
         }
@@ -520,9 +538,9 @@ int main() {
     gatt_client_init();
     
     // Register packet handler
-    hci_event_callback_registration_t hci_event_callback_registration;
-    hci_event_callback_registration.callback = &packet_handler;
-    hci_add_event_handler(&hci_event_callback_registration);
+    btstack_packet_callback_registration_t callback_registration;
+    callback_registration.callback = &packet_handler;
+    hci_add_event_handler(&callback_registration);
     
     // Start scanning for keyboard halves
     gap_set_scan_parameters(0, 0x0030, 0x0030);
