@@ -24,7 +24,11 @@ const uint col_pins[COLS] = {7, 8, 9, 10, 11, 12, 13};
 static bool key_state[ROWS][COLS] = {0};
 static uint32_t last_change_time[ROWS][COLS] = {0};
 
-static uint16_t uart_tx_handle = 0;
+// GATT Service and Characteristic handles
+static uint16_t keyboard_data_handle;
+
+static uint16_t att_read_callback(hci_con_handle_t connection_handle, uint16_t att_handle, uint16_t offset, uint8_t * buffer, uint16_t buffer_size);
+static int att_write_callback(hci_con_handle_t connection_handle, uint16_t att_handle, uint16_t transaction_mode, uint16_t offset, uint8_t *buffer, uint16_t buffer_size);
 static hci_con_handle_t connection_handle = HCI_CON_HANDLE_INVALID;
 static bool connected = false;
 
@@ -53,7 +57,7 @@ void init_matrix(void) {
 }
 
 void send_key_event(uint8_t type, uint8_t row, uint8_t col) {
-    if (!connected || uart_tx_handle == 0) return;
+    if (!connected || keyboard_data_handle == 0) return;
     
     key_event_t event = {
         .type = type,
@@ -62,7 +66,7 @@ void send_key_event(uint8_t type, uint8_t row, uint8_t col) {
         .side = 0  // left side
     };
     
-    att_server_notify(connection_handle, uart_tx_handle, 
+    att_server_notify(connection_handle, keyboard_data_handle, 
                      (uint8_t*)&event, sizeof(event));
 }
 
@@ -125,10 +129,13 @@ static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packe
 static uint16_t att_read_callback(hci_con_handle_t con_handle, uint16_t att_handle, 
                                    uint16_t offset, uint8_t *buffer, uint16_t buffer_size) {
     UNUSED(con_handle);
-    UNUSED(att_handle);
     UNUSED(offset);
     UNUSED(buffer);
     UNUSED(buffer_size);
+    
+    if (att_handle == keyboard_data_handle) {
+        return 0;  // No data to read
+    }
     return 0;
 }
 
@@ -136,9 +143,9 @@ static int att_write_callback(hci_con_handle_t con_handle, uint16_t att_handle,
                               uint16_t transaction_mode, uint16_t offset, 
                               uint8_t *buffer, uint16_t buffer_size) {
     UNUSED(con_handle);
-    UNUSED(att_handle);
     UNUSED(transaction_mode);
     UNUSED(offset);
+    UNUSED(att_handle);
     UNUSED(buffer);
     UNUSED(buffer_size);
     return 0;
@@ -159,12 +166,41 @@ int main() {
     // Initialize BTstack
     l2cap_init();
     sm_init();
-    att_server_init(NULL, att_read_callback, att_write_callback);
+    
+    // Setup ATT database manually
+    uint8_t *att_db = NULL;
+    
+    // Service UUID: 6E400001-B5A3-F393-E0A9-E50E24DCCA9E
+    uint8_t service_uuid[] = {0x9E, 0xCA, 0xDC, 0x24, 0x0E, 0xE5, 0xA9, 0xE0, 
+                              0x93, 0xF3, 0xA3, 0xB5, 0x01, 0x00, 0x40, 0x6E};
+    
+    // Characteristic UUID: 6E400003-B5A3-F393-E0A9-E50E24DCCA9E
+    uint8_t char_uuid[] = {0x9E, 0xCA, 0xDC, 0x24, 0x0E, 0xE5, 0xA9, 0xE0, 
+                           0x93, 0xF3, 0xA3, 0xB5, 0x03, 0x00, 0x40, 0x6E};
+    
+    att_db_util_add_service_uuid128(service_uuid);
+    keyboard_data_handle = att_db_util_add_characteristic_uuid128(
+        char_uuid,
+        ATT_PROPERTY_NOTIFY,
+        ATT_SECURITY_NONE, ATT_SECURITY_NONE,
+        NULL, 0);
+    
+    att_db = att_db_util_get_address();
+    
+    // Initialize ATT server
+    att_server_init(att_db, att_read_callback, att_write_callback);
+    
+    // Setup advertising data
+    uint8_t adv_data[] = {
+        0x02, 0x01, 0x06,  // Flags
+        0x09, 0x09, 'K', 'B', '_', 'L', 'e', 'f', 't',  // Complete local name
+    };
+    uint16_t adv_data_len = sizeof(adv_data);
+    gap_advertisements_set_data(adv_data_len, adv_data);
     
     // Set device name
     gap_set_local_name("KB_Left");
     gap_discoverable_control(1);
-    gap_set_bondable_mode(1);
     
     // Register packet handler
     btstack_packet_callback_registration_t hci_event_callback_registration;

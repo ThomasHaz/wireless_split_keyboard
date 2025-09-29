@@ -457,39 +457,43 @@ void process_auto_click(void) {
 // BLE GATT handlers
 static hci_con_handle_t left_handle = HCI_CON_HANDLE_INVALID;
 static hci_con_handle_t right_handle = HCI_CON_HANDLE_INVALID;
+static gatt_client_notification_t left_notification_listener;
+static gatt_client_notification_t right_notification_listener;
 
-static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size) {
-    UNUSED(channel);
-    UNUSED(size);
-    
-    if (packet_type != HCI_EVENT_PACKET) return;
-    
-    uint8_t event_type = hci_event_packet_get_type(packet);
-    
-    switch (event_type) {
-        case HCI_EVENT_DISCONNECTION_COMPLETE: {
-            hci_con_handle_t handle = hci_event_disconnection_complete_get_connection_handle(packet);
-            if (handle == left_handle) {
-                left_handle = HCI_CON_HANDLE_INVALID;
-                printf("Left half disconnected\n");
-            } else if (handle == right_handle) {
-                right_handle = HCI_CON_HANDLE_INVALID;
-                printf("Right half disconnected\n");
-            }
-            break;
-        }
-        
-        case GATT_EVENT_NOTIFICATION: {
-            key_event_t event;
-            uint16_t value_length = gatt_event_notification_get_value_length(packet);
-            if (value_length == sizeof(key_event_t)) {
-                memcpy(&event, gatt_event_notification_get_value(packet), sizeof(event));
-                process_key_event(&event);
-            }
-            break;
-        }
-    }
-}
+// UUIDs for keyboard service
+static const uint8_t keyboard_service_uuid[] = {0x9E, 0xCA, 0xDC, 0x24, 0x0E, 0xE5, 0xA9, 0xE0, 
+                                                 0x93, 0xF3, 0xA3, 0xB5, 0x01, 0x00, 0x40, 0x6E};
+
+// Connection state
+typedef enum {
+    STATE_IDLE,
+    STATE_W4_SCAN_RESULT,
+    STATE_W4_CONNECT,
+    STATE_CONNECTED,
+    STATE_W4_SERVICE_RESULT,
+    STATE_W4_CHARACTERISTIC_RESULT,
+    STATE_W4_ENABLE_NOTIFICATIONS,
+    STATE_READY
+} connection_state_t;
+
+typedef struct {
+    bd_addr_t addr;
+    bd_addr_type_t addr_type;
+    hci_con_handle_t con_handle;
+    connection_state_t state;
+    gatt_client_service_t service;
+    gatt_client_characteristic_t characteristic;
+    uint16_t service_start;
+    uint16_t service_end;
+    uint16_t char_value_handle;
+    uint16_t char_config_handle;
+    bool is_left;
+} keyboard_connection_t;
+
+static keyboard_connection_t left_kb = {.state = STATE_IDLE, .is_left = true};
+static keyboard_connection_t right_kb = {.state = STATE_IDLE, .is_left = false};
+
+
 
 // USB HID callbacks
 void tud_hid_report_complete_cb(uint8_t instance, uint8_t const* report, uint16_t len) {
@@ -516,6 +520,263 @@ void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_
     (void) buffer;
     (void) bufsize;
 }
+
+
+static void handle_gatt_client_event(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
+
+
+// static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size) {
+//     UNUSED(channel);
+//     UNUSED(size);
+    
+//     if (packet_type != HCI_EVENT_PACKET) return;
+    
+//     uint8_t event_type = hci_event_packet_get_type(packet);
+    
+//     switch (event_type) {
+//         case HCI_EVENT_DISCONNECTION_COMPLETE: {
+//             hci_con_handle_t handle = hci_event_disconnection_complete_get_connection_handle(packet);
+//             if (handle == left_handle) {
+//                 left_handle = HCI_CON_HANDLE_INVALID;
+//                 printf("Left half disconnected\n");
+//             } else if (handle == right_handle) {
+//                 right_handle = HCI_CON_HANDLE_INVALID;
+//                 printf("Right half disconnected\n");
+//             }
+//             break;
+//         }
+        
+//         case GATT_EVENT_NOTIFICATION: {
+//             key_event_t event;
+//             uint16_t value_length = gatt_event_notification_get_value_length(packet);
+//             if (value_length == sizeof(key_event_t)) {
+//                 memcpy(&event, gatt_event_notification_get_value(packet), sizeof(event));
+//                 process_key_event(&event);
+//             }
+//             break;
+//         }
+//     }
+// }
+
+
+
+static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size) {
+    UNUSED(channel);
+    UNUSED(size);
+    
+    if (packet_type != HCI_EVENT_PACKET) return;
+    
+    uint8_t event_type = hci_event_packet_get_type(packet);
+    
+    switch (event_type) {
+        case GAP_EVENT_ADVERTISING_REPORT: {
+            bd_addr_t addr;
+            gap_event_advertising_report_get_address(packet, addr);
+            uint8_t addr_type = gap_event_advertising_report_get_address_type(packet);
+            uint8_t length = gap_event_advertising_report_get_data_length(packet);
+            const uint8_t *data = gap_event_advertising_report_get_data(packet);
+            
+            // Look for device name in advertising data
+            bool is_left = false;
+            bool is_right = false;
+            
+            for (uint8_t i = 0; i < length; ) {
+                uint8_t field_length = data[i];
+                if (field_length == 0) break;
+                
+                uint8_t field_type = data[i + 1];
+                if (field_type == 0x09) {  // Complete local name
+                    if (memcmp(&data[i + 2], "KB_Left", 7) == 0) {
+                        is_left = true;
+                    } else if (memcmp(&data[i + 2], "KB_Right", 8) == 0) {
+                        is_right = true;
+                    }
+                }
+                i += field_length + 1;
+            }
+            
+            // Connect to discovered keyboard
+            if (is_left && left_kb.state == STATE_IDLE) {
+                memcpy(left_kb.addr, addr, 6);
+                left_kb.addr_type = addr_type;
+                left_kb.state = STATE_W4_CONNECT;
+                gap_stop_scan();
+                gap_connect(addr, addr_type);
+                printf("Connecting to left keyboard...\n");
+            } else if (is_right && right_kb.state == STATE_IDLE) {
+                memcpy(right_kb.addr, addr, 6);
+                right_kb.addr_type = addr_type;
+                right_kb.state = STATE_W4_CONNECT;
+                gap_stop_scan();
+                gap_connect(addr, addr_type);
+                printf("Connecting to right keyboard...\n");
+            }
+            break;
+        }
+        
+        case HCI_EVENT_LE_META: {
+            switch (hci_event_le_meta_get_subevent_code(packet)) {
+                case HCI_SUBEVENT_LE_CONNECTION_COMPLETE: {
+                    hci_con_handle_t con_handle = hci_subevent_le_connection_complete_get_connection_handle(packet);
+                    
+                    // Determine which keyboard connected
+                    keyboard_connection_t *kb = NULL;
+                    if (left_kb.state == STATE_W4_CONNECT) {
+                        kb = &left_kb;
+                        left_handle = con_handle;
+                    } else if (right_kb.state == STATE_W4_CONNECT) {
+                        kb = &right_kb;
+                        right_handle = con_handle;
+                    }
+                    
+                    if (kb) {
+                        kb->con_handle = con_handle;
+                        kb->state = STATE_W4_SERVICE_RESULT;
+                        printf("%s keyboard connected, handle=%04x\n", 
+                               kb->is_left ? "Left" : "Right", con_handle);
+                        
+                        // Discover keyboard service
+                        gatt_client_discover_primary_services_by_uuid128(
+                            handle_gatt_client_event, con_handle, (uint8_t*)keyboard_service_uuid);
+                    }
+                    
+                    // Resume scanning if we need to find the other keyboard
+                    if (left_kb.state == STATE_IDLE || right_kb.state == STATE_IDLE) {
+                        gap_set_scan_parameters(0, 0x0030, 0x0030);
+                        gap_start_scan();
+                    }
+                    break;
+                }
+            }
+            break;
+        }
+        
+        case HCI_EVENT_DISCONNECTION_COMPLETE: {
+            hci_con_handle_t handle = hci_event_disconnection_complete_get_connection_handle(packet);
+            if (handle == left_handle) {
+                left_handle = HCI_CON_HANDLE_INVALID;
+                left_kb.state = STATE_IDLE;
+                left_kb.con_handle = HCI_CON_HANDLE_INVALID;
+                printf("Left half disconnected\n");
+                
+                // Restart scanning
+                gap_set_scan_parameters(0, 0x0030, 0x0030);
+                gap_start_scan();
+            } else if (handle == right_handle) {
+                right_handle = HCI_CON_HANDLE_INVALID;
+                right_kb.state = STATE_IDLE;
+                right_kb.con_handle = HCI_CON_HANDLE_INVALID;
+                printf("Right half disconnected\n");
+                
+                // Restart scanning
+                gap_set_scan_parameters(0, 0x0030, 0x0030);
+                gap_start_scan();
+            }
+            break;
+        }
+    }
+}
+
+static void handle_gatt_client_event(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size) {
+    UNUSED(packet_type);
+    UNUSED(channel);
+    UNUSED(size);
+    
+    keyboard_connection_t *kb = NULL;
+    
+    // Determine which keyboard this event is for
+    uint16_t event_handle = HCI_CON_HANDLE_INVALID;
+    switch(hci_event_packet_get_type(packet)) {
+        case GATT_EVENT_QUERY_COMPLETE:
+            event_handle = gatt_event_query_complete_get_handle(packet);
+            break;
+        case GATT_EVENT_SERVICE_QUERY_RESULT:
+            event_handle = gatt_event_service_query_result_get_handle(packet);
+            break;
+        case GATT_EVENT_CHARACTERISTIC_QUERY_RESULT:
+            event_handle = gatt_event_characteristic_query_result_get_handle(packet);
+            break;
+    }
+    
+    if (event_handle == left_kb.con_handle) kb = &left_kb;
+    else if (event_handle == right_kb.con_handle) kb = &right_kb;
+    
+    if (!kb) return;
+    
+    switch(hci_event_packet_get_type(packet)) {
+        case GATT_EVENT_SERVICE_QUERY_RESULT: {
+            gatt_event_service_query_result_get_service(packet, &kb->service);
+            kb->service_start = kb->service.start_group_handle;
+            kb->service_end = kb->service.end_group_handle;
+            printf("%s: Service found %04x-%04x\n", kb->is_left ? "Left" : "Right", 
+                   kb->service_start, kb->service_end);
+            break;
+        }
+        
+        case GATT_EVENT_CHARACTERISTIC_QUERY_RESULT: {
+            gatt_event_characteristic_query_result_get_characteristic(packet, &kb->characteristic);
+            kb->char_value_handle = kb->characteristic.value_handle;
+            kb->char_config_handle = kb->characteristic.value_handle + 1;  // CCC is typically next handle
+            printf("%s: Characteristic found, value=%04x, config=%04x\n", 
+                   kb->is_left ? "Left" : "Right", kb->char_value_handle, kb->char_config_handle);
+            break;
+        }
+        
+        case GATT_EVENT_QUERY_COMPLETE: {
+            uint8_t status = gatt_event_query_complete_get_att_status(packet);
+            if (status != ATT_ERROR_SUCCESS) {
+                printf("%s: Query failed: %02x\n", kb->is_left ? "Left" : "Right", status);
+                kb->state = STATE_IDLE;
+                return;
+            }
+            
+            switch(kb->state) {
+                case STATE_W4_SERVICE_RESULT:
+                    if (kb->service_start != 0) {
+                        kb->state = STATE_W4_CHARACTERISTIC_RESULT;
+                        gatt_client_discover_characteristics_for_service(
+                            handle_gatt_client_event, kb->con_handle, &kb->service);
+                    }
+                    break;
+                    
+                case STATE_W4_CHARACTERISTIC_RESULT:
+                    if (kb->char_value_handle != 0) {
+                        kb->state = STATE_W4_ENABLE_NOTIFICATIONS;
+                        uint8_t config[] = {0x01, 0x00};  // Enable notifications
+                        gatt_client_write_value_of_characteristic(
+                            handle_gatt_client_event, kb->con_handle,
+                            kb->char_config_handle, sizeof(config), config);
+                    }
+                    break;
+                    
+                case STATE_W4_ENABLE_NOTIFICATIONS:
+                    kb->state = STATE_READY;
+                    printf("%s keyboard ready!\n", kb->is_left ? "Left" : "Right");
+                    
+                    // Register for notifications
+                    gatt_client_listen_for_characteristic_value_updates(
+                        kb->is_left ? &left_notification_listener : &right_notification_listener,
+                        handle_gatt_client_event, kb->con_handle, &kb->characteristic);
+                    break;
+                    
+                default:
+                    break;
+            }
+            break;
+        }
+        
+        case GATT_EVENT_NOTIFICATION: {
+            key_event_t event;
+            uint16_t value_length = gatt_event_notification_get_value_length(packet);
+            if (value_length == sizeof(key_event_t)) {
+                memcpy(&event, gatt_event_notification_get_value(packet), sizeof(event));
+                process_key_event(&event);
+            }
+            break;
+        }
+    }
+}
+
 
 int main() {
     stdio_init_all();

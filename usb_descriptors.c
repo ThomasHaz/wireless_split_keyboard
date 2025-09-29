@@ -2,6 +2,9 @@
  * USB HID Descriptors for composite keyboard + mouse
  */
 
+// Prevent BTstack HID definitions from conflicting
+#define __HID_H
+
 #include "tusb.h"
 
 //--------------------------------------------------------------------+
