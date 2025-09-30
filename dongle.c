@@ -118,6 +118,18 @@ static uint32_t last_macro_time = 0;
 #define HID_KEY_BACKSPACE 0x2A
 #define HID_KEY_TAB 0x2B
 #define HID_KEY_SPACE 0x2C
+#define HID_KEY_MINUS 0x2D           // - and _
+#define HID_KEY_EQUAL 0x2E           // = and +
+#define HID_KEY_LEFTBRACE 0x2F       // [ and {
+#define HID_KEY_RIGHTBRACE 0x30      // ] and }
+#define HID_KEY_BACKSLASH 0x31       // \ and |
+#define HID_KEY_HASHTILDE 0x32       // # and ~
+#define HID_KEY_SEMICOLON 0x33       // ; and :
+#define HID_KEY_APOSTROPHE 0x34      // ' and "
+#define HID_KEY_GRAVE 0x35           // ` and ~
+#define HID_KEY_COMMA 0x36           // , and <
+#define HID_KEY_DOT 0x37             // . and >
+#define HID_KEY_SLASH 0x38           // / and ?
 #define HID_KEY_CAPS_LOCK 0x39
 #define HID_KEY_F1 0x3A
 #define HID_KEY_F2 0x3B
@@ -493,7 +505,38 @@ typedef struct {
 static keyboard_connection_t left_kb = {.state = STATE_IDLE, .is_left = true};
 static keyboard_connection_t right_kb = {.state = STATE_IDLE, .is_left = false};
 
-
+static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size) {
+    UNUSED(channel);
+    UNUSED(size);
+    
+    if (packet_type != HCI_EVENT_PACKET) return;
+    
+    uint8_t event_type = hci_event_packet_get_type(packet);
+    
+    switch (event_type) {
+        case HCI_EVENT_DISCONNECTION_COMPLETE: {
+            hci_con_handle_t handle = hci_event_disconnection_complete_get_connection_handle(packet);
+            if (handle == left_handle) {
+                left_handle = HCI_CON_HANDLE_INVALID;
+                printf("Left half disconnected\n");
+            } else if (handle == right_handle) {
+                right_handle = HCI_CON_HANDLE_INVALID;
+                printf("Right half disconnected\n");
+            }
+            break;
+        }
+        
+        case GATT_EVENT_NOTIFICATION: {
+            key_event_t event;
+            uint16_t value_length = gatt_event_notification_get_value_length(packet);
+            if (value_length == sizeof(key_event_t)) {
+                memcpy(&event, gatt_event_notification_get_value(packet), sizeof(event));
+                process_key_event(&event);
+            }
+            break;
+        }
+    }
+}
 
 // USB HID callbacks
 void tud_hid_report_complete_cb(uint8_t instance, uint8_t const* report, uint16_t len) {
@@ -521,46 +564,10 @@ void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id, hid_report_type_
     (void) bufsize;
 }
 
-
+// Forward declaration
 static void handle_gatt_client_event(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
 
-
-// static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size) {
-//     UNUSED(channel);
-//     UNUSED(size);
-    
-//     if (packet_type != HCI_EVENT_PACKET) return;
-    
-//     uint8_t event_type = hci_event_packet_get_type(packet);
-    
-//     switch (event_type) {
-//         case HCI_EVENT_DISCONNECTION_COMPLETE: {
-//             hci_con_handle_t handle = hci_event_disconnection_complete_get_connection_handle(packet);
-//             if (handle == left_handle) {
-//                 left_handle = HCI_CON_HANDLE_INVALID;
-//                 printf("Left half disconnected\n");
-//             } else if (handle == right_handle) {
-//                 right_handle = HCI_CON_HANDLE_INVALID;
-//                 printf("Right half disconnected\n");
-//             }
-//             break;
-//         }
-        
-//         case GATT_EVENT_NOTIFICATION: {
-//             key_event_t event;
-//             uint16_t value_length = gatt_event_notification_get_value_length(packet);
-//             if (value_length == sizeof(key_event_t)) {
-//                 memcpy(&event, gatt_event_notification_get_value(packet), sizeof(event));
-//                 process_key_event(&event);
-//             }
-//             break;
-//         }
-//     }
-// }
-
-
-
-static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size) {
+static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size) {
     UNUSED(channel);
     UNUSED(size);
     
@@ -777,7 +784,6 @@ static void handle_gatt_client_event(uint8_t packet_type, uint16_t channel, uint
     }
 }
 
-
 int main() {
     stdio_init_all();
     
@@ -800,7 +806,7 @@ int main() {
     
     // Register packet handler
     btstack_packet_callback_registration_t callback_registration;
-    callback_registration.callback = &packet_handler;
+    callback_registration.callback = &hci_packet_handler;
     hci_add_event_handler(&callback_registration);
     
     // Start scanning for keyboard halves
