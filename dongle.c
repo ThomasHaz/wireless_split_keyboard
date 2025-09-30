@@ -27,6 +27,9 @@
 #include "ble/att_server.h"
 #include "ble/gatt_client.h"
 
+// Include keymap configuration
+#include "keymap.h"
+
 // Key event structure (must match keyboard halves)
 typedef struct {
     uint8_t type;      // 0 = key press, 1 = key release
@@ -34,12 +37,6 @@ typedef struct {
     uint8_t col;
     uint8_t side;      // 0 = left, 1 = right
 } key_event_t;
-
-// Keyboard dimensions
-#define ROWS 5
-#define COLS 7
-#define SIDES 2
-#define MAX_LAYERS 4
 
 // Current layer
 static uint8_t current_layer = 0;
@@ -75,184 +72,6 @@ static int active_macro = -1;
 static uint8_t macro_position = 0;
 static uint32_t last_macro_time = 0;
 #define MACRO_KEY_DELAY 50  // ms between macro keys
-
-// HID keycodes (subset - expand as needed)
-#define HID_KEY_A 0x04
-#define HID_KEY_B 0x05
-#define HID_KEY_C 0x06
-#define HID_KEY_D 0x07
-#define HID_KEY_E 0x08
-#define HID_KEY_F 0x09
-#define HID_KEY_G 0x0A
-#define HID_KEY_H 0x0B
-#define HID_KEY_I 0x0C
-#define HID_KEY_J 0x0D
-#define HID_KEY_K 0x0E
-#define HID_KEY_L 0x0F
-#define HID_KEY_M 0x10
-#define HID_KEY_N 0x11
-#define HID_KEY_O 0x12
-#define HID_KEY_P 0x13
-#define HID_KEY_Q 0x14
-#define HID_KEY_R 0x15
-#define HID_KEY_S 0x16
-#define HID_KEY_T 0x17
-#define HID_KEY_U 0x18
-#define HID_KEY_V 0x19
-#define HID_KEY_W 0x1A
-#define HID_KEY_X 0x1B
-#define HID_KEY_Y 0x1C
-#define HID_KEY_Z 0x1D
-#define HID_KEY_1 0x1E
-#define HID_KEY_2 0x1F
-#define HID_KEY_3 0x20
-#define HID_KEY_4 0x21
-#define HID_KEY_5 0x22
-#define HID_KEY_6 0x23
-#define HID_KEY_7 0x24
-#define HID_KEY_8 0x25
-#define HID_KEY_9 0x26
-#define HID_KEY_0 0x27
-#define HID_KEY_ENTER 0x28
-#define HID_KEY_ESC 0x29
-#define HID_KEY_BACKSPACE 0x2A
-#define HID_KEY_TAB 0x2B
-#define HID_KEY_SPACE 0x2C
-#define HID_KEY_MINUS 0x2D           // - and _
-#define HID_KEY_EQUAL 0x2E           // = and +
-#define HID_KEY_LEFTBRACE 0x2F       // [ and {
-#define HID_KEY_RIGHTBRACE 0x30      // ] and }
-#define HID_KEY_BACKSLASH 0x31       // \ and |
-#define HID_KEY_HASHTILDE 0x32       // # and ~
-#define HID_KEY_SEMICOLON 0x33       // ; and :
-#define HID_KEY_APOSTROPHE 0x34      // ' and "
-#define HID_KEY_GRAVE 0x35           // ` and ~
-#define HID_KEY_COMMA 0x36           // , and <
-#define HID_KEY_DOT 0x37             // . and >
-#define HID_KEY_SLASH 0x38           // / and ?
-#define HID_KEY_CAPS_LOCK 0x39
-#define HID_KEY_F1 0x3A
-#define HID_KEY_F2 0x3B
-#define HID_KEY_F3 0x3C
-#define HID_KEY_F4 0x3D
-#define HID_KEY_F5 0x3E
-#define HID_KEY_F6 0x3F
-#define HID_KEY_F7 0x40
-#define HID_KEY_F8 0x41
-#define HID_KEY_F9 0x42
-#define HID_KEY_F10 0x43
-#define HID_KEY_F11 0x44
-#define HID_KEY_F12 0x45
-#define HID_KEY_DELETE 0x4C
-#define HID_KEY_ARROW_RIGHT 0x4F
-#define HID_KEY_ARROW_LEFT 0x50
-#define HID_KEY_ARROW_DOWN 0x51
-#define HID_KEY_ARROW_UP 0x52
-
-// Modifiers
-#define HID_MOD_LEFT_CTRL 0x01
-#define HID_MOD_LEFT_SHIFT 0x02
-#define HID_MOD_LEFT_ALT 0x04
-#define HID_MOD_LEFT_GUI 0x08
-#define HID_MOD_RIGHT_CTRL 0x10
-#define HID_MOD_RIGHT_SHIFT 0x20
-#define HID_MOD_RIGHT_ALT 0x40
-#define HID_MOD_RIGHT_GUI 0x80
-
-// Special key codes for layers and macros
-#define KEY_LAYER_1 0xF0
-#define KEY_LAYER_2 0xF1
-#define KEY_LAYER_3 0xF2
-#define KEY_MACRO_0 0xE0
-#define KEY_MOUSE_LEFT 0xD0
-#define KEY_MOUSE_RIGHT 0xD1
-#define KEY_MOUSE_MIDDLE 0xD2
-#define KEY_MOUSE_UP 0xD3
-#define KEY_MOUSE_DOWN 0xD4
-#define KEY_MOUSE_LEFT_MOVE 0xD5
-#define KEY_MOUSE_RIGHT_MOVE 0xD6
-#define KEY_AUTO_CLICK 0xD7
-
-// Keymap - [layer][side][row][col]
-// This is an example QWERTY layout - customize to your needs
-static const uint8_t keymap[MAX_LAYERS][SIDES][ROWS][COLS] = {
-    // Layer 0 - Base
-    {
-        // Left half
-        {
-            {HID_KEY_ESC, HID_KEY_1, HID_KEY_2, HID_KEY_3, HID_KEY_4, HID_KEY_5, 0},
-            {HID_KEY_TAB, HID_KEY_Q, HID_KEY_W, HID_KEY_E, HID_KEY_R, HID_KEY_T, 0},
-            {HID_KEY_CAPS_LOCK, HID_KEY_A, HID_KEY_S, HID_KEY_D, HID_KEY_F, HID_KEY_G, 0},
-            {HID_MOD_LEFT_SHIFT, HID_KEY_Z, HID_KEY_X, HID_KEY_C, HID_KEY_V, HID_KEY_B, 0},
-            {HID_MOD_LEFT_CTRL, HID_MOD_LEFT_GUI, HID_MOD_LEFT_ALT, KEY_LAYER_1, HID_KEY_SPACE, 0, 0}
-        },
-        // Right half
-        {
-            {0, HID_KEY_6, HID_KEY_7, HID_KEY_8, HID_KEY_9, HID_KEY_0, HID_KEY_BACKSPACE},
-            {0, HID_KEY_Y, HID_KEY_U, HID_KEY_I, HID_KEY_O, HID_KEY_P, HID_KEY_BACKSPACE},
-            {0, HID_KEY_H, HID_KEY_J, HID_KEY_K, HID_KEY_L, 0, HID_KEY_ENTER},
-            {0, HID_KEY_N, HID_KEY_M, 0, 0, HID_MOD_RIGHT_SHIFT, 0},
-            {0, 0, HID_KEY_SPACE, KEY_LAYER_2, HID_MOD_RIGHT_ALT, HID_MOD_RIGHT_CTRL, 0}
-        }
-    },
-    // Layer 1 - Function/Navigation
-    {
-        // Left half
-        {
-            {0, HID_KEY_F1, HID_KEY_F2, HID_KEY_F3, HID_KEY_F4, HID_KEY_F5, 0},
-            {0, 0, 0, 0, 0, 0, 0},
-            {0, 0, 0, 0, 0, 0, 0},
-            {0, 0, 0, 0, 0, 0, 0},
-            {0, 0, 0, 0, 0, 0, 0}
-        },
-        // Right half
-        {
-            {0, HID_KEY_F6, HID_KEY_F7, HID_KEY_F8, HID_KEY_F9, HID_KEY_F10, HID_KEY_F11},
-            {0, 0, 0, HID_KEY_ARROW_UP, 0, 0, HID_KEY_F12},
-            {0, 0, HID_KEY_ARROW_LEFT, HID_KEY_ARROW_DOWN, HID_KEY_ARROW_RIGHT, 0, 0},
-            {0, 0, 0, 0, 0, 0, 0},
-            {0, 0, 0, 0, 0, 0, 0}
-        }
-    },
-    // Layer 2 - Mouse and Macros
-    {
-        // Left half
-        {
-            {0, KEY_MACRO_0, KEY_MACRO_0+1, KEY_MACRO_0+2, 0, 0, 0},
-            {0, KEY_MOUSE_LEFT, KEY_MOUSE_UP, KEY_MOUSE_RIGHT, 0, 0, 0},
-            {0, KEY_MOUSE_LEFT_MOVE, KEY_MOUSE_DOWN, KEY_MOUSE_RIGHT_MOVE, 0, 0, 0},
-            {0, 0, 0, 0, 0, 0, 0},
-            {0, 0, 0, 0, KEY_AUTO_CLICK, 0, 0}
-        },
-        // Right half
-        {
-            {0, 0, 0, 0, 0, 0, 0},
-            {0, 0, 0, 0, 0, 0, 0},
-            {0, 0, 0, 0, 0, 0, 0},
-            {0, 0, 0, 0, 0, 0, 0},
-            {0, 0, 0, 0, 0, 0, 0}
-        }
-    },
-    // Layer 3 - Custom
-    {
-        // Left half
-        {
-            {0, 0, 0, 0, 0, 0, 0},
-            {0, 0, 0, 0, 0, 0, 0},
-            {0, 0, 0, 0, 0, 0, 0},
-            {0, 0, 0, 0, 0, 0, 0},
-            {0, 0, 0, 0, 0, 0, 0}
-        },
-        // Right half
-        {
-            {0, 0, 0, 0, 0, 0, 0},
-            {0, 0, 0, 0, 0, 0, 0},
-            {0, 0, 0, 0, 0, 0, 0},
-            {0, 0, 0, 0, 0, 0, 0},
-            {0, 0, 0, 0, 0, 0, 0}
-        }
-    }
-};
 
 void init_macros(void) {
     // Example macro 0: "Hello"
